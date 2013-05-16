@@ -17,11 +17,38 @@
 #include <netinet/tcp.h>            /*tcphdr struct*/
 #include <string.h>									/*string*/
 #include <time.h>
+#include "hdfs.h"										/*hdfs*/
 
 #define OTHER 0
 #define ARP   1
 #define TCP   2
 #define UDP   3
+
+hdfsFile writeFile;
+hdfsFS fs;
+
+void initHdfs(const char* writePath){
+	  fs = hdfsConnect("172.16.8.137", 9000);//default........ip...HDFS..
+    writeFile = hdfsOpenFile(fs, writePath, O_WRONLY|O_CREAT, 0, 0, 0);
+    if(!writeFile) {
+          fprintf(stderr, "Failed to open %s for writing!\n", writePath);
+          exit(-1);
+    }
+}
+
+tSize saveToHdfs(char * buffer, int size){
+	tSize num_written_bytes = hdfsWrite(fs, writeFile, (void*)buffer, size);
+  return num_written_bytes;
+}
+
+void closeHdfs(){
+	if (hdfsFlush(fs, writeFile)) {
+          fprintf(stderr, "Failed to 'flush'\n");
+          exit(-1);
+  }
+	hdfsCloseFile(fs, writeFile);
+}
+
 
 void saveResult(FILE * logFile, struct pcap_pkthdr *header, const u_char *pkt_data) {
 	struct ethhdr * myethhdr = (struct ethhdr *)pkt_data;
@@ -38,6 +65,10 @@ void saveResult(FILE * logFile, struct pcap_pkthdr *header, const u_char *pkt_da
 	time_t local_tv_sec;
 	struct tm *ltime;
 	char timestr[16];
+	char tmp[100];
+	
+	
+	memset(tmp, 0, 100);
 	
 	switch (ntohs(myethhdr->h_proto))
 	{
@@ -65,6 +96,8 @@ void saveResult(FILE * logFile, struct pcap_pkthdr *header, const u_char *pkt_da
 			ltime=localtime(&local_tv_sec);
 			strftime( timestr, sizeof timestr, "%H:%M:%S", ltime);
 			fprintf(logFile, "%s\t%d\t%X\t%X\t%d\t%d\t%d \n",timestr,type,sIp,dIp,sPort,dPort,header->len);	
+			sprintf(tmp, "%s\t%d\t%X\t%X\t%d\t%d\t%d \n",timestr,type,sIp,dIp,sPort,dPort,header->len);	
+			saveToHdfs(tmp, strlen(tmp)+1);
 			break;
 		case 0x0806:
 			type= ARP;
@@ -95,14 +128,14 @@ int main()
 
 	FILE * logFile;
 	
-	
 	memset(date, 0, 10);
 	timer = time(NULL);//这一句也可以改成time(&timer);  
 	tblock = localtime(&timer);  
 	sprintf(date,"%d_%d",tblock->tm_mon+1, tblock->tm_mday);  
 	printf("%s\n", date);
 
-		
+	initHdfs(date);
+			
 	if( (logFile=fopen(date, "w"))==NULL ) {
 		printf("Open file error(log/log.txt)\n");
 		exit(-1);	
@@ -168,7 +201,7 @@ int main()
 	/* Retrieve the packets */
 	while((res = pcap_next_ex( adhandle, &header, &pkt_data)) >= 0 && j++ < 1000){
 		//if(j%10 == 0)
-		//	printf("number:%d\n", j);
+		printf("number:%d\n", j);
 		if(res == 0)
 			/* Timeout elapsed */
 			continue;
@@ -182,5 +215,9 @@ int main()
 	printf("Caught packet success\n");
 	pcap_close(adhandle);  
 	fclose(logFile);
+	closeHdfs();
+	
 	return 0;
 }
+
+
